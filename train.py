@@ -115,8 +115,7 @@ for i, j in itertools.product(range(args.img_size), range(args.img_size)):
     prior_y[i, j] = torch.histc(target_all[:, i, j], bins=n_classes, min=0, max=n_classes)
 
 prior_y /= len(target_all)
-prior_y += torch.tensor(1e-9)
-prior_y  = prior_y.permute(2, 0, 1) # [img_size, img_size, classes] => [classes, img_size, img_size]
+prior_y += torch.tensor(1e-9) # [img_size, img_size, classes]
 
 def train(epoch, update=True, topk=(1,)):
     global prior_y
@@ -133,10 +132,12 @@ def train(epoch, update=True, topk=(1,)):
 
         outputs = net(inputs)['out']
 
-        preds = torch.sum(torch.softmax(outputs, 1), 0)
-        preds = preds / inputs.size(0) # [classes, img_size, img_size]
+        preds = torch.softmax(outputs, 1)  # [batch-size, classes, img_size, img_size]
+        preds = preds.permute(0, 2, 3, 1) # [batch-size, img_size, img_size, classes]
 
-        R = nn.KLDivLoss()(p_y.log(), preds)
+        p_y_ex = p_y.expand(preds.size(0), preds.size(1), preds.size(2), preds.size(3))
+    
+        R = nn.KLDivLoss()(p_y_ex.log(), preds)
         kldivloss = args.gamma * R
         loss = criterion(outputs, targets.long()) + kldivloss
         train_loss += loss.item()
@@ -177,10 +178,12 @@ def test(epoch, update=True, topk=(1,)):
         outputs = net(inputs)['out']
         loss = criterion(outputs, targets.long())
 
-        preds = torch.sum(torch.softmax(outputs, 1), 0)
-        preds = preds / inputs.size(0) # [classes, img_size, img_size]
+        preds = torch.softmax(outputs, 1)  # [batch-size, classes, img_size, img_size]
+        preds = preds.permute(0, 2, 3, 1) # [batch-size, img_size, img_size, classes]
 
-        R = nn.KLDivLoss()(p_y.log(), preds)
+        p_y_ex = p_y.expand(preds.size(0), preds.size(1), preds.size(2), preds.size(3))
+
+        R = nn.KLDivLoss()(p_y_ex.log(), preds)
         kldivloss = args.gamma * R
         loss = criterion(outputs, targets.long()) + kldivloss
         test_loss += loss.item()
@@ -194,13 +197,13 @@ def test(epoch, update=True, topk=(1,)):
 
         progress_bar(i, len(testloader),
                      'Loss: %.3f | KL Loss: %.3f'
-                     % (train_loss/(i+1), train_kldivloss/(i+1)))
+                     % (test_loss/(i+1), test_kldivloss/(i+1)))
 
     loss, kldivloss, mean_iou = metrics.calc_metrics()
     metrics.initialize()
 
     if update:
-        if best_loss > test_loss:
+        if best_loss > loss:
             print('saving checkpoint...')
             checkpoint(test_loss, epoch)
             best_loss = test_loss
