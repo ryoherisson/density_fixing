@@ -15,15 +15,16 @@ import torchvision.models.segmentation as segmentation
 from dataset import Compose, Resize, Normalize_Tensor
 from utils import progress_bar
 from utils import accuracy
-from utils import iou
+from metrics.metrics import Metrics
+
 warnings.simplefilter('ignore')
 
 parser = argparse.ArgumentParser(description='Density-Fixing PyTorch Training')
 parser.add_argument("--dataset", type=str, default="voc")
 parser.add_argument("--img_size", type=int, default=256)
 parser.add_argument("--test", action="store_true", default=False)
-parser.add_argument("--gamma", type=float, default=0.1, help="density-fixing parameter")
-parser.add_argument("--lr", type=float, default=0.1, help="learning rate")
+parser.add_argument("--gamma", type=float, default=0.0, help="density-fixing parameter")
+parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
 parser.add_argument("--resume", action="store_true", default=False, help="resume from checkpoint")
 parser.add_argument("--name", type=str, default="0", help="name of run")
 parser.add_argument("--seed", default=0, type=int, help="random seed")
@@ -41,7 +42,7 @@ else:
     print("use cpu..")
     device = torch.device("cpu")
 
-best_acc = 0  # best test accuracy
+best_loss = 1e9  # best test loss
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 if args.seed != 0:
@@ -55,7 +56,7 @@ print("==> Preparing data...")
 #     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 # ])
 
-root = "../."
+root = "."
 root_dataset = f"{root}/torch_datasets/data"
 
 if args.dataset == "voc":
@@ -96,8 +97,11 @@ logname = (f'{root}/results/{args.dataset}/log_' + net.__class__.__name__ + '_' 
 net = net.to(device)
 net = nn.DataParallel(net)
 criterion = nn.CrossEntropyLoss()
-# optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.decay)
-optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.decay)
+optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.decay)
+# optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.decay)
+
+# metrics
+metrics = Metrics(n_classes=n_classes)
 
 # prior histgram
 import itertools
@@ -133,13 +137,12 @@ def train(epoch, update=True, topk=(1,)):
 
         R = nn.KLDivLoss()(p_y.log(), preds)
         loss = criterion(outputs, targets.long()) + args.gamma * R
-        # import pdb; pdb.set_trace()
-
         train_loss += loss.item()
-        # accuracies += accuracy(outputs, targets, topk=topk)
-        pred = outputs.max(1)[1].cpu()
-        mean_iou = iou(pred, targets.cpu(), n_classes)
-        mean_iou = np.nanmean(mean_iou)
+
+        pred = torch.softmax(outputs, 1).max(1)[1].cpu()
+        metrics.update(preds = pred.cpu().detach().clone(), 
+                       targets = targets.cpu().detach().clone(), 
+                       loss=loss.item())
 
         if update:
             optimizer.zero_grad()
@@ -147,60 +150,61 @@ def train(epoch, update=True, topk=(1,)):
             optimizer.step()
 
         progress_bar(i, len(trainloader),
-                     'Loss: %.3f | IoU: %.3f%%'
-                     % (train_loss/(i+1), mean_iou))
+                     'Loss: %.3f'
+                     % (train_loss/(i+1)))
 
-    return (train_loss/i, mean_iou)
+    loss, mean_iou = metrics.calc_metrics()
+    metrics.initialize()
+
+    return (loss, mean_iou)
 
 def test(epoch, update=True, topk=(1,)):
-    global best_acc
+    global best_loss
     net.eval()
     test_loss = 0
-    accuracies = []
-
-    mean_ious = np.array([0.0 for i in range(n_classes)])
-    preds_t = []
-    targets_t = []
     
+    p_y = prior_y.to(device)
+
     for i, (inputs, targets) in enumerate(testloader):
         inputs, targets = inputs.to(device), targets.to(device)
 
         outputs = net(inputs)['out']
         loss = criterion(outputs, targets.long())
 
-        test_loss += loss.item()
-        # accuracies += accuracy(outputs, targets, topk=topk)
-        # acc = np.mean(accuracies)
-        
-        pred = outputs.max(1)[1].cpu()
-        preds_t.append(pred)
-        targets_t.append(targets.cpu())
+        preds = torch.sum(torch.softmax(outputs, 1), 0)
+        preds = preds / inputs.size(0) # [classes, img_size, img_size]
 
-        mean_iou = iou(pred, targets.cpu(), n_classes)
-        mean_iou = np.nanmean(mean_iou)
+        R = nn.KLDivLoss()(p_y.log(), preds)
+        loss = criterion(outputs, targets.long()) + args.gamma * R
+        test_loss += loss.item()
+        
+        pred = torch.softmax(outputs, 1).max(1)[1].cpu()
+        metrics.update(preds = pred.cpu().detach().clone(), 
+                       targets = targets.cpu().detach().clone(), 
+                       loss=loss.item())
 
         progress_bar(i, len(testloader),
-                     'Loss: %.3f | IoU: %.3f%%'
-                     % (test_loss/(i+1), mean_iou))
+                     'Loss: %.3f'
+                     % (test_loss/(i+1)))
 
-    ious = iou(torch.cat(preds_t), torch.cat(targets_t), n_classes=n_classes)
-    acc = np.nanmean(ious)
+    loss, mean_iou = metrics.calc_metrics()
+    metrics.initialize()
 
     if update:
-        if acc > best_acc:
-            checkpoint(acc, epoch)
-            best_acc = acc
+        if best_loss > test_loss:
+            print('saving checkpoint...')
+            checkpoint(test_loss, epoch)
+            best_loss = test_loss
 
-    # return (test_loss/i, np.mean(accuracies))
-    return (test_loss/i, acc)
+    return (loss, mean_iou)
 
 
-def checkpoint(acc, epoch):
+def checkpoint(loss, epoch):
     # Save checkpoint.
     print('Saving..')
     state = {
         'net': net,
-        'acc': acc,
+        'loss': loss,
         'epoch': epoch,
         'rng_state': torch.get_rng_state()
     }
@@ -223,24 +227,27 @@ def adjust_learning_rate(optimizer, epoch):
 if not os.path.exists(logname) and not args.test:
     with open(logname, 'w') as logfile:
         logwriter = csv.writer(logfile, delimiter=',')
-        logwriter.writerow(['epoch', 'train loss', 'train acc',
-                            'test loss', 'test acc'])
+        logwriter.writerow(['epoch', 'train loss', 'train iou',
+                            'test loss', 'test iou'])
 
 if not args.test:
     for epoch in range(start_epoch, args.n_epochs):
-        train_loss, train_acc = train(epoch)
-        test_loss, test_acc = test(epoch)
+        train_loss, train_iou = train(epoch)
+        test_loss, test_iou = test(epoch)
+
+        print(f"Train loss:{train_loss}, mean_iou:{train_iou}")
+        print(f"Test loss:{test_loss}, mean_iou:{test_iou}")
         adjust_learning_rate(optimizer, epoch)
         with open(logname, 'a') as logfile:
             logwriter = csv.writer(logfile, delimiter=',')
-            logwriter.writerow([epoch, train_loss, train_acc, test_loss,
-                                test_acc])
+            logwriter.writerow([epoch, train_loss, train_iou, test_loss,
+                                test_iou])
 else:
     for k in [1, 5]:
-        test_loss, test_acc = test(1, update=False, topk=(k,))
-        train_loss, train_acc = train(1, update=False, topk=(k,))
-        print("Top{} Train Acc={}".format(k, train_acc))
-        print("Top{} Test Acc={}".format(k, test_acc))
+        test_loss, test_iou = test(1, update=False, topk=(k,))
+        train_loss, train_iou = train(1, update=False, topk=(k,))
+        print("Top{} Train IoU={}".format(k, train_iou))
+        print("Top{} Test IoU={}".format(k, test_iou))
 
     print("train_loss=", train_loss)
     print("test_loss=", test_loss)
