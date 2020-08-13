@@ -13,7 +13,6 @@ import torchvision
 import torchvision.models.segmentation as segmentation
 
 from dataset import Compose, Resize, Normalize_Tensor
-from models.resnet import ResNet18
 from utils import progress_bar
 from utils import accuracy
 from utils import iou
@@ -111,7 +110,8 @@ target_all = torch.cat([target.unsqueeze(0).float() for _, target in trainset], 
 for i, j in itertools.product(range(args.img_size), range(args.img_size)):
     prior_y[i, j] = torch.histc(target_all[:, i, j], bins=n_classes, min=0, max=n_classes)
 
-prior_y /= len(target_all) 
+prior_y /= len(target_all)
+prior_y += torch.tensor(1e-9)
 prior_y  = prior_y.permute(2, 0, 1) # [img_size, img_size, classes] => [classes, img_size, img_size]
 
 def train(epoch, update=True, topk=(1,)):
@@ -133,8 +133,7 @@ def train(epoch, update=True, topk=(1,)):
 
         R = nn.KLDivLoss()(p_y.log(), preds)
         loss = criterion(outputs, targets.long()) + args.gamma * R
-
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
 
         train_loss += loss.item()
         # accuracies += accuracy(outputs, targets, topk=topk)
@@ -148,7 +147,7 @@ def train(epoch, update=True, topk=(1,)):
             optimizer.step()
 
         progress_bar(i, len(trainloader),
-                     'Loss: %.3f | Acc: %.3f%%'
+                     'Loss: %.3f | IoU: %.3f%%'
                      % (train_loss/(i+1), mean_iou))
 
     return (train_loss/i, mean_iou)
@@ -177,11 +176,12 @@ def test(epoch, update=True, topk=(1,)):
         preds_t.append(pred)
         targets_t.append(targets.cpu())
 
-        acc = 0.0
+        mean_iou = iou(pred, targets.cpu(), n_classes)
+        mean_iou = np.nanmean(mean_iou)
 
         progress_bar(i, len(testloader),
-                     'Loss: %.3f | Acc: %.3f%%'
-                     % (test_loss/(i+1), acc))
+                     'Loss: %.3f | IoU: %.3f%%'
+                     % (test_loss/(i+1), mean_iou))
 
     ious = iou(torch.cat(preds_t), torch.cat(targets_t), n_classes=n_classes)
     acc = np.nanmean(ious)
