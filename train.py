@@ -2,6 +2,7 @@ from __future__ import print_function
 import os
 import csv
 import argparse
+import itertools
 import warnings
 import numpy as np
 import torch
@@ -57,7 +58,7 @@ print("==> Preparing data...")
 # ])
 
 root = "."
-root_dataset = f"{root}/torch_datasets/data"
+root_dataset = f"./{root}/torch_datasets/data"
 
 if args.dataset == "voc":
     n_classes = 21
@@ -100,11 +101,10 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.decay)
 # optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.decay)
 
-# metrics
+# Metrics
 metrics = Metrics(n_classes=n_classes)
 
-# prior histgram
-import itertools
+# Prior histgram
 # prior_y: torch.Size(img_size, img_size, classes)
 prior_y = torch.zeros(args.img_size, args.img_size, n_classes)
 
@@ -123,6 +123,7 @@ def train(epoch, update=True, topk=(1,)):
     print("\nEpoch: %d" % epoch)
     net.train()
     train_loss = 0.0
+    train_kldivloss = 0.0
     accuracies = []
 
     p_y = prior_y.to(device)
@@ -136,13 +137,16 @@ def train(epoch, update=True, topk=(1,)):
         preds = preds / inputs.size(0) # [classes, img_size, img_size]
 
         R = nn.KLDivLoss()(p_y.log(), preds)
-        loss = criterion(outputs, targets.long()) + args.gamma * R
+        kldivloss = args.gamma * R
+        loss = criterion(outputs, targets.long()) + kldivloss
         train_loss += loss.item()
+        train_kldivloss += kldivloss.item()
 
         pred = torch.softmax(outputs, 1).max(1)[1].cpu()
         metrics.update(preds = pred.cpu().detach().clone(), 
                        targets = targets.cpu().detach().clone(), 
-                       loss=loss.item())
+                       loss=loss.item(),
+                       kldivloss=kldivloss.item())
 
         if update:
             optimizer.zero_grad()
@@ -150,18 +154,20 @@ def train(epoch, update=True, topk=(1,)):
             optimizer.step()
 
         progress_bar(i, len(trainloader),
-                     'Loss: %.3f'
-                     % (train_loss/(i+1)))
+                     'Loss: %.3f | KL Loss: %.3f'
+                     % (train_loss/(i+1), train_kldivloss/(i+1)))
 
-    loss, mean_iou = metrics.calc_metrics()
+    loss, kldivloss, mean_iou = metrics.calc_metrics()
     metrics.initialize()
 
-    return (loss, mean_iou)
+    return (loss, kldivloss, mean_iou)
 
 def test(epoch, update=True, topk=(1,)):
     global best_loss
+    global prior_y
     net.eval()
-    test_loss = 0
+    test_loss = 0.0
+    test_kldivloss = 0.0
     
     p_y = prior_y.to(device)
 
@@ -175,19 +181,22 @@ def test(epoch, update=True, topk=(1,)):
         preds = preds / inputs.size(0) # [classes, img_size, img_size]
 
         R = nn.KLDivLoss()(p_y.log(), preds)
-        loss = criterion(outputs, targets.long()) + args.gamma * R
+        kldivloss = args.gamma * R
+        loss = criterion(outputs, targets.long()) + kldivloss
         test_loss += loss.item()
+        test_kldivloss += kldivloss.item()
         
         pred = torch.softmax(outputs, 1).max(1)[1].cpu()
         metrics.update(preds = pred.cpu().detach().clone(), 
                        targets = targets.cpu().detach().clone(), 
-                       loss=loss.item())
+                       loss=loss.item(),
+                       kldivloss=kldivloss.item())
 
         progress_bar(i, len(testloader),
-                     'Loss: %.3f'
-                     % (test_loss/(i+1)))
+                     'Loss: %.3f | KL Loss: %.3f'
+                     % (train_loss/(i+1), train_kldivloss/(i+1)))
 
-    loss, mean_iou = metrics.calc_metrics()
+    loss, kldivloss, mean_iou = metrics.calc_metrics()
     metrics.initialize()
 
     if update:
@@ -196,7 +205,7 @@ def test(epoch, update=True, topk=(1,)):
             checkpoint(test_loss, epoch)
             best_loss = test_loss
 
-    return (loss, mean_iou)
+    return (loss, kldivloss, mean_iou)
 
 
 def checkpoint(loss, epoch):
@@ -227,21 +236,21 @@ def adjust_learning_rate(optimizer, epoch):
 if not os.path.exists(logname) and not args.test:
     with open(logname, 'w') as logfile:
         logwriter = csv.writer(logfile, delimiter=',')
-        logwriter.writerow(['epoch', 'train loss', 'train iou',
-                            'test loss', 'test iou'])
+        logwriter.writerow(['epoch', 'train loss', 'train_kldivloss', 'train iou',
+                            'test loss', 'test_kldivloss', 'test iou'])
 
 if not args.test:
     for epoch in range(start_epoch, args.n_epochs):
-        train_loss, train_iou = train(epoch)
-        test_loss, test_iou = test(epoch)
+        train_loss, train_kldivloss, train_iou = train(epoch)
+        test_loss, test_kldivloss, test_iou = test(epoch)
 
-        print(f"Train loss:{train_loss}, mean_iou:{train_iou}")
-        print(f"Test loss:{test_loss}, mean_iou:{test_iou}")
+        print(f"Train loss:{train_loss}, kldivloss:{train_kldivloss}, mean_iou:{train_iou}")
+        print(f"Test loss:{test_loss}, kldivloss:{test_kldivloss}, mean_iou:{test_iou}")
         adjust_learning_rate(optimizer, epoch)
         with open(logname, 'a') as logfile:
             logwriter = csv.writer(logfile, delimiter=',')
-            logwriter.writerow([epoch, train_loss, train_iou, test_loss,
-                                test_iou])
+            logwriter.writerow([epoch, train_loss, train_kldivloss, train_iou, test_loss,
+                                test_kldivloss, test_iou])
 else:
     for k in [1, 5]:
         test_loss, test_iou = test(1, update=False, topk=(k,))

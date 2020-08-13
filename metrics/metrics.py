@@ -13,12 +13,14 @@ class Metrics(object):
     def initialize(self):
         self.cmx = np.zeros((self.n_classes, self.n_classes))
         self.loss_list = []
+        self.kldivloss_list = []
         self.intersection = torch.zeros(self.n_classes)
         self.union = torch.zeros(self.n_classes)
 
-    def update(self, preds, targets, loss):
+    def update(self, preds, targets, loss, kldivloss):
         
         self.loss_list.append(loss)
+        self.kldivloss_list.append(kldivloss)
         
         pred = preds.view(-1)
         target = targets.view(-1)
@@ -38,8 +40,9 @@ class Metrics(object):
                 self.union[c] = float('nan')
         
         loss = np.mean(self.loss_list)
+        kldivloss = np.mean(self.kldivloss_list)
 
         ious = np.array(self.intersection) / np.array(self.union)
         mean_iou = np.nanmean(ious)
 
-        return loss, mean_iou
+        return loss, kldivloss, mean_iou
