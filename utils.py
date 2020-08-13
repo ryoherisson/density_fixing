@@ -141,3 +141,22 @@ def accuracy(outputs, targets, topk=(1,)):
         res.append(correct_k.mul_(100.0 / batch_size).cpu().numpy())
 
     return res
+
+import numpy as np
+
+def iou(pred, target, n_classes=21):
+    ious = []
+    pred = pred.view(-1)
+    target = target.view(-1)
+
+    for c in range(n_classes):
+        pred_inds = pred == c
+        target_inds = target == c
+        intersection = (pred_inds[target_inds]).long().sum().data.cpu()
+        union = pred_inds.long().sum().data.cpu() + target_inds.long().sum().data.cpu() - intersection
+        if union == 0:
+            ious.append(float('nan'))
+        else:
+            ious.append(float(intersection) / float(max(union, 1)))
+
+    return np.array(ious)
