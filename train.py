@@ -232,7 +232,7 @@ def checkpoint(loss, epoch, best=False):
                 + str(args.seed) + '_best')
     else:
         torch.save(state, f'{root}/checkpoint/{args.dataset}/{args.name}/ckpt.t7' + args.name + '_'
-                + str(args.seed) + '_{epoch}epoch')
+                + str(args.seed) + f'_{epoch}epoch')
 
 
 
