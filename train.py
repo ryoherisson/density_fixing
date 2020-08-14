@@ -25,7 +25,7 @@ parser.add_argument("--dataset", type=str, default="voc")
 parser.add_argument("--img_size", type=int, default=256)
 parser.add_argument("--test", action="store_true", default=False)
 parser.add_argument("--gamma", type=float, default=0.0, help="density-fixing parameter")
-parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
+parser.add_argument("--lr", type=float, default=0.0001, help="learning rate")
 parser.add_argument("--resume", action="store_true", default=False, help="resume from checkpoint")
 parser.add_argument("--name", type=str, default="0", help="name of run")
 parser.add_argument("--seed", default=0, type=int, help="random seed")
@@ -58,14 +58,14 @@ print("==> Preparing data...")
 # ])
 
 root = "."
-root_dataset = f"./{root}/torch_datasets/data"
+root_dataset = f"{root}/torch_datasets/data"
 
 if args.dataset == "voc":
     n_classes = 21
     color_mean, color_std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
     transforms = Compose([Resize(args.img_size), Normalize_Tensor(color_mean, color_std)])
-    trainset = datasets.VOCSegmentation(root=root_dataset, year="2012", image_set="train", download=True, transforms=transforms)
-    testset = datasets.VOCSegmentation(root=root_dataset, year="2012", image_set="val", download=True, transforms=transforms)
+    trainset = datasets.VOCSegmentation(root=root_dataset, year="2012", image_set="train", download=False, transforms=transforms)
+    testset = datasets.VOCSegmentation(root=root_dataset, year="2012", image_set="val", download=False, transforms=transforms)
 else:
     raise NotImplementedError
 
@@ -98,8 +98,8 @@ logname = (f'{root}/results/{args.dataset}/log_' + net.__class__.__name__ + '_' 
 net = net.to(device)
 net = nn.DataParallel(net)
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.decay)
-# optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.decay)
+# optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.decay)
+optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.decay)
 
 # Metrics
 metrics = Metrics(n_classes=n_classes)
