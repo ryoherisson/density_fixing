@@ -112,9 +112,10 @@ prior_y = torch.zeros(args.img_size, args.img_size, n_classes)
 target_all = torch.cat([target.unsqueeze(0).float() for _, target in trainset], axis=0)
 
 for i, j in itertools.product(range(args.img_size), range(args.img_size)):
-    prior_y[i, j] = torch.histc(target_all[:, i, j], bins=n_classes, min=0, max=n_classes)
+    hist = torch.histc(target_all[:, i, j], bins=n_classes, min=0, max=n_classes)
+    hist[0] = 0 # background => 0
+    prior_y[i, j] = hist / hist.sum()
 
-prior_y /= len(target_all)
 prior_y += torch.tensor(1e-9) # [img_size, img_size, classes]
 
 def train(epoch, update=True, topk=(1,)):
@@ -132,13 +133,23 @@ def train(epoch, update=True, topk=(1,)):
 
         outputs = net(inputs)['out']
 
+        ### Regularization ###
         preds = torch.softmax(outputs, 1)  # [batch-size, classes, img_size, img_size]
         preds = preds.permute(0, 2, 3, 1) # [batch-size, img_size, img_size, classes]
 
         p_y_ex = p_y.expand(preds.size(0), preds.size(1), preds.size(2), preds.size(3))
+
+        preds = preds.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
+        p_y_ex = p_y_ex.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
     
+        idx_0 = (targets.view(-1) == 0).nonzero().squeeze() # get 0 index
+        preds = preds[~idx_0] # get preds whose target is not 0
+        p_y_ex = p_y_ex[~idx_0] # get prior whose target is not 0
+
         R = nn.KLDivLoss()(p_y_ex.log(), preds)
         kldivloss = args.gamma * R
+        ###########################
+
         loss = criterion(outputs, targets.long()) + kldivloss
         train_loss += loss.item()
         train_kldivloss += kldivloss.item()
