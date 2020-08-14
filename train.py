@@ -187,15 +187,24 @@ def test(epoch, update=True, topk=(1,)):
         inputs, targets = inputs.to(device), targets.to(device)
 
         outputs = net(inputs)['out']
-        loss = criterion(outputs, targets.long())
 
+        ### Regularization ###
         preds = torch.softmax(outputs, 1)  # [batch-size, classes, img_size, img_size]
         preds = preds.permute(0, 2, 3, 1) # [batch-size, img_size, img_size, classes]
 
         p_y_ex = p_y.expand(preds.size(0), preds.size(1), preds.size(2), preds.size(3))
 
+        preds = preds.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
+        p_y_ex = p_y_ex.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
+    
+        idx_0 = (targets.view(-1) == 0).nonzero().squeeze() # get 0 index
+        preds = preds[~idx_0] # get preds whose target is not 0
+        p_y_ex = p_y_ex[~idx_0] # get prior whose target is not 0
+
         R = nn.KLDivLoss()(p_y_ex.log(), preds)
         kldivloss = args.gamma * R
+        ###########################
+
         loss = criterion(outputs, targets.long()) + kldivloss
         test_loss += loss.item()
         test_kldivloss += kldivloss.item()
