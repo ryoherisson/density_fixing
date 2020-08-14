@@ -142,9 +142,9 @@ def train(epoch, update=True, topk=(1,)):
         preds = preds.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
         p_y_ex = p_y_ex.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
     
-        idx_0 = (targets.view(-1) == 0).nonzero().squeeze() # get 0 index
-        preds = preds[~idx_0] # get preds whose target is not 0
-        p_y_ex = p_y_ex[~idx_0] # get prior whose target is not 0
+        idx_0 = (targets.view(-1) != 0).nonzero().squeeze() # get 0 index
+        preds = preds[idx_0] # get preds whose target is not 0
+        p_y_ex = p_y_ex[idx_0] # get prior whose target is not 0
 
         R = nn.KLDivLoss()(p_y_ex.log(), preds)
         kldivloss = args.gamma * R
@@ -197,9 +197,9 @@ def test(epoch, update=True, topk=(1,)):
         preds = preds.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
         p_y_ex = p_y_ex.reshape(-1, n_classes) # [batch-size * img_size * img_size, classes]
     
-        idx_0 = (targets.view(-1) == 0).nonzero().squeeze() # get 0 index
-        preds = preds[~idx_0] # get preds whose target is not 0
-        p_y_ex = p_y_ex[~idx_0] # get prior whose target is not 0
+        idx_0 = (targets.view(-1) != 0).nonzero().squeeze() # get 0 index
+        preds = preds[idx_0] # get preds whose target is not 0
+        p_y_ex = p_y_ex[idx_0] # get prior whose target is not 0
 
         R = nn.KLDivLoss()(p_y_ex.log(), preds)
         kldivloss = args.gamma * R
