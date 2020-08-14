@@ -203,15 +203,19 @@ def test(epoch, update=True, topk=(1,)):
     metrics.initialize()
 
     if update:
-        if best_loss > loss:
+        if epoch >= args.n_epochs - 12:
             print('saving checkpoint...')
-            checkpoint(test_loss, epoch)
-            best_loss = test_loss
+            checkpoint(loss, epoch, best=False)
+
+        if best_loss > loss:
+            print('saving best checkpoint...')
+            checkpoint(loss, epoch, best=True)
+            best_loss = loss
 
     return (loss, kldivloss, mean_iou)
 
 
-def checkpoint(loss, epoch):
+def checkpoint(loss, epoch, best=False):
     # Save checkpoint.
     print('Saving..')
     state = {
@@ -222,8 +226,14 @@ def checkpoint(loss, epoch):
     }
     if not os.path.isdir('checkpoint'):
         os.mkdir('checkpoint')
-    torch.save(state, f'{root}/checkpoint/{args.dataset}/ckpt.t7' + args.name + '_'
-               + str(args.seed))
+
+    if best:
+        torch.save(state, f'{root}/checkpoint/{args.dataset}/{args.name}/ckpt.t7' + args.name + '_'
+                + str(args.seed) + '_best')
+    else:
+        torch.save(state, f'{root}/checkpoint/{args.dataset}/{args.name}/ckpt.t7' + args.name + '_'
+                + str(args.seed) + '_{epoch}epoch')
+
 
 
 def adjust_learning_rate(optimizer, epoch):

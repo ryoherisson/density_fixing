@@ -12,6 +12,8 @@ class Metrics(object):
 
     def initialize(self):
         self.cmx = np.zeros((self.n_classes, self.n_classes))
+        self.pred_list = []
+        self.target_list = []
         self.loss_list = []
         self.kldivloss_list = []
         self.intersection = torch.zeros(self.n_classes)
@@ -25,6 +27,14 @@ class Metrics(object):
         pred = preds.view(-1)
         target = targets.view(-1)
 
+        self.pred_list.append(pred)
+        self.target_list.append(target)
+
+    def calc_metrics(self):
+
+        pred = torch.cat([p for p in self.pred_list], axis=0)
+        target = torch.cat([t for t in self.target_list], axis=0)
+
         for c in range(self.n_classes):
             pred_inds = pred == c
             target_inds = target == c
@@ -32,8 +42,6 @@ class Metrics(object):
             union = pred_inds.long().sum().data.cpu() + target_inds.long().sum().data.cpu() - intersection
             self.intersection[c] += intersection
             self.union[c] += union
-
-    def calc_metrics(self):
 
         for c in range(self.n_classes):
             if self.union[c] == 0:
